@@ -45,6 +45,7 @@ import tk.wasdennnoch.androidn_ify.systemui.qs.tiles.hooks.CellularTileHook;
 import tk.wasdennnoch.androidn_ify.systemui.qs.tiles.hooks.WifiTileHook;
 import tk.wasdennnoch.androidn_ify.utils.ConfigUtils;
 import tk.wasdennnoch.androidn_ify.utils.ResourceUtils;
+import tk.wasdennnoch.androidn_ify.utils.RomUtils;
 
 public class StatusBarHeaderHooks {
 
@@ -111,7 +112,6 @@ public class StatusBarHeaderHooks {
     private static Context mContext;
 
     public static Button mEditButton;
-    private static ResourceUtils mResUtils;
 
     private static int mBarState = 2;
     public static int mQsPage;
@@ -543,8 +543,11 @@ public class StatusBarHeaderHooks {
 
     private static XC_MethodHook setTilesHook = new XC_MethodHook() {
         boolean cancelled = false;
+
         @Override
         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+            if (mUseDragPanel && !RomUtils.isAicp())
+                return; // Causes problem with "Enlarge first row" setting
             if (mHeaderQsPanel != null) { // keep
                 // Only set up views if the tiles actually changed
                 if (param.args.length == 0) return; // PA already checks itself
@@ -729,6 +732,7 @@ public class StatusBarHeaderHooks {
         transition(mDateTimeAlarmGroup, !showingDetail);
         transition(mRightContainer, !showingDetail);
         transition(mExpandIndicator, !showingDetail);
+        transition(mHeaderQsPanel, !showingDetail);
         setEditButtonVisible(!(showingDetail || mBarState != NotificationPanelHooks.STATE_SHADE));
         if (mWeatherContainer != null) {
             try {
@@ -744,8 +748,8 @@ public class StatusBarHeaderHooks {
             View mDetailDoneButton = (View) XposedHelpers.getObjectField(mQsPanel, "mDetailDoneButton");
             LinearLayout mDetailButtons = (LinearLayout) mDetailDoneButton.getParent();
             mDetailButtons.setVisibility(mEditing ? View.GONE : View.VISIBLE);
-            mCollapseAfterHideDatails = NotificationPanelHooks.isCollapsed();
-            NotificationPanelHooks.expandIfNecessary();
+            mCollapseAfterHideDatails = NotificationPanelHooks.expandIfNecessary();
+            XposedHook.logD(TAG, "handleShowingDetail: showing detail; expanding: " + mCollapseAfterHideDatails);
             try {
                 mQsDetailHeaderTitle.setText((int) XposedHelpers.callMethod(detail, "getTitle"));
             } catch (Throwable t) {
@@ -766,7 +770,11 @@ public class StatusBarHeaderHooks {
                     public void onClick(View v) {
                         boolean checked = !mQsDetailHeaderSwitch.isChecked();
                         mQsDetailHeaderSwitch.setChecked(checked);
-                        XposedHelpers.callMethod(detail, "setToggleState", checked);
+                        try {
+                            XposedHelpers.callMethod(detail, "setToggleState", checked);
+                        } catch (Throwable t) {
+                            XposedHook.logE(TAG, "Error calling setToggleState", t);
+                        }
                     }
                 });
             }
@@ -779,9 +787,10 @@ public class StatusBarHeaderHooks {
                 }
             }
             if (mEditing) {
-                mQsDetailHeaderTitle.setText(getResUtils().getString(R.string.qs_edit_detail));
+                mQsDetailHeaderTitle.setText(ResourceUtils.getInstance(mContext).getString(R.string.qs_edit_detail));
             }
         } else {
+            XposedHook.logD(TAG, "handleShowingDetail: hiding detail; collapsing: " + mCollapseAfterHideDatails);
             if (mCollapseAfterHideDatails) NotificationPanelHooks.collapseIfNecessary();
             mQsDetailHeader.setClickable(false);
             if (mEditing) {
@@ -790,13 +799,6 @@ public class StatusBarHeaderHooks {
                 QSTileHostHooks.recreateTiles();
             }
         }
-    }
-
-    private static ResourceUtils getResUtils() {
-        if (mResUtils == null)
-            mResUtils = ResourceUtils.getInstance(mContext);
-
-        return mResUtils;
     }
 
     private static void transition(final View v, final boolean in) {
@@ -855,7 +857,7 @@ public class StatusBarHeaderHooks {
         FrameLayout.LayoutParams qsPanelLp = (FrameLayout.LayoutParams) mQsPanel.getLayoutParams();
         if (visible) {
             mEditButton.setVisibility(View.VISIBLE);
-            qsPanelLp.bottomMargin = getResUtils().getDimensionPixelSize(R.dimen.qs_panel_margin_bottom);
+            qsPanelLp.bottomMargin = ResourceUtils.getInstance(mContext).getDimensionPixelSize(R.dimen.qs_panel_margin_bottom);
         } else {
             mEditButton.setVisibility(View.GONE);
             qsPanelLp.bottomMargin = 0;
@@ -999,10 +1001,6 @@ public class StatusBarHeaderHooks {
                             forceAnim = headerItem != null && (boolean) headerItem &&
                                     !Objects.equals(XposedHelpers.getObjectField(param.args[1], "icon"),
                                             iv.getTag(iv.getResources().getIdentifier("qs_icon_tag", "id", PACKAGE_SYSTEMUI)));
-                            if (forceAnim) {
-                                String type = (String) XposedHelpers.getAdditionalInstanceField(param.thisObject, "headerTileRowType");
-                                XposedHook.logD(TAG, "Animating QuickQS icon: " + forceAnim + (type != null ? ("; type: " + type) : ""));
-                            }
                         }
 
                         @Override
@@ -1013,9 +1011,21 @@ public class StatusBarHeaderHooks {
                                     Drawable icon = ((ImageView) iconView).getDrawable();
                                     if (icon instanceof Animatable) {
                                         ((Animatable) icon).start();
+                                        String type = (String) XposedHelpers.getAdditionalInstanceField(param.thisObject, "headerTileRowType");
+                                        XposedHook.logD(TAG, "Animating QuickQS icon: " + forceAnim + (type != null ? ("; type: " + type) : ""));
                                     }
                                 }
                             }
+                        }
+                    });
+                }
+
+                if (ConfigUtils.qs().enable_qs_editor) {
+                    XposedHelpers.findAndHookMethod(PACKAGE_SYSTEMUI + ".settings.BrightnessController", classLoader, "updateIcon", boolean.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            View icon = (View) XposedHelpers.getObjectField(param.thisObject, "mIcon");
+                            if (icon != null) icon.setVisibility(View.GONE);
                         }
                     });
                 }
@@ -1148,17 +1158,6 @@ public class StatusBarHeaderHooks {
                         }
                     }
                 });
-
-                /*resparam.res.hookLayout(PACKAGE_SYSTEMUI, "layout", "quick_settings_brightness_dialog", new XC_LayoutInflated() {
-                    @Override
-                    public void handleLayoutInflated(LayoutInflatedParam liparam) throws Throwable {
-                        if (ConfigUtils.qs().enable_qs_editor) {
-                            liparam.view.findViewById(
-                                    liparam.view.getResources().getIdentifier("brightness_icon", "id", PACKAGE_SYSTEMUI))
-                                    .setVisibility(View.GONE);
-                        }
-                    }
-                });*/
 
             }
         } catch (Throwable t) {

@@ -53,6 +53,7 @@ public class NotificationPanelHooks {
     private static XC_MethodHook setBarStateHook = new XC_MethodHook() {
         @Override
         protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+            XposedHook.logD(TAG, "setBarStateHook: Setting state to " + (int) param.args[0]);
             StatusBarHeaderHooks.onSetBarState((int) param.args[0]);
         }
     };
@@ -75,14 +76,24 @@ public class NotificationPanelHooks {
         return (mExpandIndicator != null && !mExpandIndicator.isExpanded());
     }
 
-    public static void expandIfNecessary() {
-        if (mExpandIndicator == null || mNotificationPanelView == null) return;
-        if (!mExpandIndicator.isExpanded()) flingSettings(true);
+    public static boolean expandIfNecessary() {
+        if (mExpandIndicator != null && mNotificationPanelView != null) {
+            if (!mExpandIndicator.isExpanded()) {
+                flingSettings(true);
+                return true;
+            }
+        }
+        return false;
     }
 
-    public static void collapseIfNecessary() {
-        if (mExpandIndicator == null || mNotificationPanelView == null) return;
-        if (mExpandIndicator.isExpanded()) flingSettings(false);
+    public static boolean collapseIfNecessary() {
+        if (mExpandIndicator != null && mNotificationPanelView != null) {
+            if (mExpandIndicator.isExpanded()) {
+                flingSettings(false);
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void flingSettings(boolean expanded) {
