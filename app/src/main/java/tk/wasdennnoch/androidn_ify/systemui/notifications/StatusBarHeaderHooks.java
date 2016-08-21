@@ -382,6 +382,16 @@ public class StatusBarHeaderHooks {
                     mTaskManagerButton.setLayoutParams(taskManagerButtonLp);
                 }
 
+                try { // OOS (and maybe more in the future)
+                    XposedHelpers.findMethodBestMatch(mStatusBarHeaderView.getClass(), "startDateActivity");
+                    if (mStatusBarHeaderView instanceof View.OnClickListener) {
+                        View.OnClickListener l = (View.OnClickListener) mStatusBarHeaderView;
+                        mDateCollapsed.setOnClickListener(l);
+                        mDateExpanded.setOnClickListener(l);
+                    }
+                } catch (Throwable ignore) {
+                }
+
 
                 if (mCarrierText != null)
                     mLeftContainer.addView(mCarrierText);
@@ -550,7 +560,8 @@ public class StatusBarHeaderHooks {
                 return; // Causes problem with "Enlarge first row" setting
             if (mHeaderQsPanel != null) { // keep
                 // Only set up views if the tiles actually changed
-                if (param.args.length == 0) return; // PA already checks itself
+                if (param.args == null || param.args.length == 0)
+                    return; // PA already checks itself
                 Collection tiles = (Collection) param.args[0];
                 ArrayList<String> newTiles = new ArrayList<>();
                 for (Object qstile : tiles) {
@@ -927,9 +938,15 @@ public class StatusBarHeaderHooks {
                 XposedHelpers.findAndHookMethod(classStatusBarHeaderView, "onClick", View.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (param.args[0] == mClock) {
+                        Object v = param.args[0];
+                        if (v == mClock) {
                             try {
                                 XposedHelpers.callMethod(param.thisObject, "startClockActivity");
+                            } catch (Throwable ignore) {
+                            }
+                        } else if (v == mDateCollapsed || v == mDateExpanded) {
+                            try {
+                                XposedHelpers.callMethod(param.thisObject, "startDateActivity");
                             } catch (Throwable ignore) {
                             }
                         }
@@ -978,9 +995,17 @@ public class StatusBarHeaderHooks {
 
                 boolean firstRowLarge = ConfigUtils.qs().large_first_row;
                 if (ConfigUtils.qs().new_click_behavior) {
-                    new WifiTileHook(classQSTile, classLoader, (!mUseDragPanel && !firstRowLarge));
-                    new BluetoothTileHook(classQSTile, classLoader, (!mUseDragPanel && !firstRowLarge));
-                    new CellularTileHook(classQSTile, classLoader);
+                    final WifiTileHook w = new WifiTileHook(classLoader, (!mUseDragPanel && !firstRowLarge));
+                    final BluetoothTileHook b = new BluetoothTileHook(classLoader, (!mUseDragPanel && !firstRowLarge));
+                    final CellularTileHook c = new CellularTileHook(classLoader);
+                    XposedHelpers.findAndHookMethod(classQSTile, "handleLongClick", new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            Object that = param.thisObject;
+                            if (w.maybeHandleLongClick(that) || b.maybeHandleLongClick(that) || c.maybeHandleLongClick(that))
+                                param.setResult(null);
+                        }
+                    });
                 }
 
                 XposedHelpers.findAndHookMethod(classQSTile, "handleStateChanged", handleStateChangedHook);
